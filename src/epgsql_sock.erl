@@ -772,6 +772,16 @@ on_replication(?COPY_DATA, <<?X_LOG_DATA, StartLSN:?int64, EndLSN:?int64,
 on_replication(?ERROR, Err, State) ->
     Reason = epgsql_wire:decode_error(Err),
     {stop, {error, Reason}, State};
+%% The server ends the stream. CopyDone (e.g. the end of a timeline in physical replication) is
+%% answered with CopyDone, as the protocol requires. CommandComplete ("COPY 0") is what a walsender
+%% sends when it exits on a server shutdown or a switchover, and the connection closes after it.
+%% Neither is an error of the connection: it stops with {shutdown, _}, which the owner gets as the
+%% exit reason and which logs no crash report.
+on_replication(?COPY_DONE, _Data, State) ->
+    send(State, ?COPY_DONE, []),
+    {noreply, State};
+on_replication(?COMMAND_COMPLETE, Data, State) ->
+    {stop, {shutdown, {replication_ended, epgsql_wire:decode_complete(Data)}}, State};
 on_replication(M, Data, Sock) when M == ?NOTICE;
                                    M == ?NOTIFICATION;
                                    M == ?PARAMETER_STATUS ->
